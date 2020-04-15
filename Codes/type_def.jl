@@ -14,11 +14,11 @@ mutable struct Pars
 end
 
 mutable struct Grids
-	a::Vector{Float64}
-	ϵ::Vector{Float64}
-	k::Vector{Float64}
-	z::Vector{Float64}
-	N::Vector{Int64}
+	a::Vector{Float64}	# Idiosyncratic endogenous state
+	ϵ::Vector{Float64}	# Idiosyncratic exogenous state
+	k::Vector{Float64}	# Aggregate endogenous state
+	z::Vector{Float64}	# Aggregate exogenous state
+	N::Vector{Int64}	
 	n::Dict{Symbol, Int64}
 	Pϵ::Matrix{Float64}
 	Pz::Matrix{Float64}
@@ -29,7 +29,7 @@ mutable struct KS
 
 	gr::Grids
 
-	K′::Array{Float64, 2}
+	k′::Array{Float64, 2}
 	r::Array{Float64, 2}
 	w::Array{Float64, 2}
 
@@ -78,7 +78,7 @@ function KS(;
 
 	gr = Grids(agrid, ϵgrid, kgrid, zgrid, N, grnames, Pϵ, Pz)
 
-	K′ = ones(Nk, Nz)
+	k′ = ones(Nk, Nz)
 	r, w = [ones(Nk, Nz) for jj in 1:2]
 
 	vf = zeros(Na, Nϵ, Nk, Nz)
@@ -87,7 +87,7 @@ function KS(;
 	ϕ = [zeros(size(vf)) for jj in 1:Nϕ]
 	polnames = Dict(:a => 1, :c => 2)
 
-	return KS(pars, gr, K′, r, w, vf, Nϕ, ϕ, polnames)
+	return KS(pars, gr, k′, r, w, vf, Nϕ, ϕ, polnames)
 end
 
 # Utilities to manipulate ϕ's

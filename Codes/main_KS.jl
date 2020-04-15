@@ -45,7 +45,7 @@ function opt_value(ks::KS, itp_v)
 		wv = ks.w[jk, jz]
 
 		wv, rv = ks.w[jk, jz], ks.r[jk, jz]
-		kp = ks.K′[jk, jz]
+		kp = ks.k′[jk, jz]
 
 		for (ja, av) in enumerate(gr.a), (jϵ, ϵv) in enumerate(gr.ϵ)
 
@@ -88,7 +88,7 @@ function vfi_iter(ks::KS)
 	return new_v
 end
 
-function update_vϕ!(ks::KS, new_v; upd_η=0.5)
+function update_vϕ!(ks::KS, new_v; upd_η=0.9)
 	ks.vf = ks.vf + upd_η * (new_v - ks.vf)
 end
 
@@ -171,29 +171,29 @@ function simul(ks::KS)
 	return k_vec, z_vec
 end
 
-function new_LoM_K(ks::KS, β::Vector)
+function new_LoM_k(ks::KS, β::Vector)
 	gr = ks.gr
-	new_K = similar(ks.K′)
+	new_k = similar(ks.k′)
 
 	for (jk, kv) in enumerate(gr.k), (jz, zv) in enumerate(gr.z)
 		Khat = exp( β'log.([kv, zv]) )
 		Khat = max(min(Khat, maximum(gr.k)), minimum(gr.k))
-		new_K[jk, jz] = Khat
+		new_k[jk, jz] = Khat
 	end
-	return new_K
+	return new_k
 end
 
-function update_LoM_K!(ks::KS, new_K; upd_η = 0.5)
+function update_LoM_k!(ks::KS, new_k; upd_η = 0.5)
 
-	norm = sqrt( sum(ks.K′.^2) )
-	dist = sqrt( sum((new_K-ks.K′).^2) ) / norm
+	norm = sqrt( sum(ks.k′.^2) )
+	dist = sqrt( sum((new_k-ks.k′).^2) ) / norm
 
-	ks.K′ = ks.K′ + upd_η * (new_K - ks.K′)
+	ks.k′ = ks.k′ + upd_η * (new_k - ks.k′)
 	return dist
 end
 
 
-function update_K!(ks::KS)
+function update_k!(ks::KS)
 	# Simulate and get time series for (K_t, z_t)
 	k_vec, z_vec = simul(ks)
 
@@ -202,10 +202,10 @@ function update_K!(ks::KS)
 	ols = lm(@formula(k ~ -1 + k_lag + z), df)
 
 	# Figure out new LoM
-	new_K = new_LoM_K(ks, coef(ols))
+	new_k = new_LoM_k(ks, coef(ols))
 
-	# Update ks.K′
-	dist = update_LoM_K!(ks, new_K)
+	# Update ks.k′
+	dist = update_LoM_k!(ks, new_k)
 	return dist
 end
 
@@ -251,14 +251,17 @@ function eqm!(ks::KS; maxiter::Int64=250, tol::Float64=1e-4)
 	tol_vfi = 5e-2
 	dist_v, dist_K = zeros(2)
 
-	dist_p = update_prices!(ks)
+
 	while dist > tol && iter < maxiter
 		iter += 1
 
-		dist_v = vfi!(ks, tol = tol_vfi)
-		dist = dist_v
+		# Not needed for now but would be if labor supply endogenous
+		dist_p = update_prices!(ks)
 
-		dist_K = update_K!(ks)
+		dist_v = vfi!(ks, tol = tol_vfi)
+		dist = max(dist_v, dist_p)
+
+		dist_K = update_k!(ks)
 
 		dist = max(dist, dist_K)
 
