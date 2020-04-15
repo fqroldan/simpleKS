@@ -1,4 +1,4 @@
-using QuantEcon, Random, Interpolations, Distributions, BasisMatrices, Optim, PlotlyJS, ColorSchemes
+using QuantEcon, Random, Interpolations, Distributions, BasisMatrices, DataFrames, GLM, Optim, PlotlyJS, ColorSchemes, Printf
 
 include("type_def.jl")
 
@@ -11,7 +11,6 @@ function value(ks::KS, ap, yv, jϵ, jz, kpv, itp_v)
 	if c <= 0
 		return -1e10 + c
 	else
-
 		Ev = 0.0
 		for (jϵp, ϵpv) in enumerate(gr.ϵ), (jzp, zpv) in enumerate(gr.z)
 			Ev += gr.Pϵ[jϵ, jϵp] * gr.Pz[jz, jzp] * itp_v(ap, ϵpv, kpv, zpv)
