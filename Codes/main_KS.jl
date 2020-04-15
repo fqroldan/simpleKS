@@ -1,15 +1,15 @@
-using QuantEcon, Interpolations, Distributions, Optim, PlotlyJS, ColorSchemes
+using QuantEcon, Random, Interpolations, Distributions, BasisMatrices, Optim, PlotlyJS, ColorSchemes
 
 include("type_def.jl")
 
-function value(ks::KS, ap, yv, jϵ, jz, kpv)
+function value(ks::KS, ap, yv, jϵ, jz, kpv, itp_v)
 	pars, gr = ks.pars, ks.gr
 	β, γ = pars.β, pars.γ
 
 	c = budget_constraint(yv, ap)
 
 	if c <= 0
-		return -1e6 + c
+		return -1e10 + c
 	else
 
 		Ev = 0.0
@@ -51,17 +51,23 @@ function opt_value(ks::KS, itp_v)
 
 			yv = CoH(av, ϵv, rv, wv)
 
+			if amin > min(yv, amax)
+				println(amax, amin, yv)
+			end
+			amax = min(yv, amax)
+
 			res = Optim.optimize(
-				ap -> -value(ks, ap, yv, jϵ, jz, kp),
+				ap -> -value(ks, ap, yv, jϵ, jz, kp, itp_v),
 				amin, amax, GoldenSection()
 				)
 
 			ap = res.minimizer
+			cc = budget_constraint(yv, ap)
 
 			new_v[ja, jϵ, jk, jz] = -res.minimum
 			new_a[ja, jϵ, jk, jz] = ap
 
-			new_c[ja, jϵ, jk, jz] = budget_constraint(yv, ap)
+			new_c[ja, jϵ, jk, jz] = cc
 		end
 	end
 
@@ -82,9 +88,8 @@ function vfi_iter(ks::KS)
 	return new_v
 end
 
-function update_vϕ!(ks::KS, new_v, new_ϕ; upd_η=0.5)
+function update_vϕ!(ks::KS, new_v; upd_η=0.5)
 	ks.vf = ks.vf + upd_η * (new_v - ks.vf)
-	# ks.ϕ  = ks.ϕ  + upd_η * (new_ϕ - ks.ϕ )
 end
 
 function vfi!(ks::KS; maxiter = 2500, tol::Float64=1e-4)
@@ -101,15 +106,110 @@ function vfi!(ks::KS; maxiter = 2500, tol::Float64=1e-4)
 		norm_v = sqrt( sum(old_v.^2) )
 		dist = sqrt( sum((new_v-old_v).^2) ) / norm_v
 
-		update_vϕ!(ks, new_v, new_ϕ, upd_η = upd_η)
+		update_vϕ!(ks, new_v, upd_η = upd_η)
 	end
 	return dist
 end
 
-function update_K!(ks::KS)
+function iter_simul(ks::KS, λ, k0, z0, itp_a, aϵ_grid, basis, Qϵ)
+	ga = [itp_a(aϵ_grid[jaϵ,1], aϵ_grid[jaϵ,2], k0, z0) for jaϵ in 1:size(aϵ_grid,1)]
+
+	k1 = ga'λ
+	k1 = max(min(k1, maximum(ks.gr.k)), minimum(ks.gr.k))
+
+	ϵ1 = rand(Normal(0,1))
+
+	z1 = exp( ks.pars.ρz * log(z0) + ks.pars.σz * ϵ1 )
+	z1 = max(min(z1, maximum(ks.gr.z)), minimum(ks.gr.z))
+
+	savings = max.(min.(ga, maximum(ks.gr.a)), minimum(ks.gr.a))
+
+	Qa = BasisMatrix(basis, Expanded(), savings, 0).vals[1]
+	Q = row_kron(Qϵ, Qa)
+
+	λ1 = Q' * λ
+
+	return λ1, k1, z1
 end
 
-function update_prices!(ks::KS, upd_η)
+function simul(ks::KS)
+	gr = ks.gr
+	Random.seed!(1)
+
+	burn_in = 100
+	simul_length = 1000
+
+	Na = 1000
+
+	agrid_fine = range(minimum(gr.a), maximum(gr.a), length=Na)
+	Qϵ = kron(gr.Pϵ, ones(Na,1))
+
+	λ = ones(Na*gr.N[2])
+	λ = λ / sum(λ)
+
+	aϵ_grid = gridmake(agrid_fine, gr.ϵ)
+
+	k0 = mean(gr.k)
+	z0 = mean(gr.z)
+
+	knots = (gr.a, gr.ϵ, gr.k, gr.z)
+	itp_a = interpolate(knots, ks.ϕ[ks.n[:a]], Gridded(Linear()))
+	
+	basis = Basis(LinParams(agrid_fine, 0))
+	for tt in 1:burn_in
+		λ, k0, z0 = iter_simul(ks, λ, k0, z0, itp_a, aϵ_grid, basis, Qϵ)
+	end
+
+	k_vec, z_vec = [Vector{Float64}(undef, simul_length) for jj in 1:2]
+
+	for tt in 1:simul_length
+		k_vec[tt] = k0
+		z_vec[tt] = z0
+		λ, k0, z0 = iter_simul(ks, λ, k0, z0, itp_a, aϵ_grid, basis, Qϵ)
+	end
+
+	return k_vec, z_vec
+end
+
+function new_LoM_K(ks::KS, β::Vector)
+	gr = ks.gr
+	new_K = similar(ks.K′)
+
+	for (jk, kv) in enumerate(gr.k), (jz, zv) in enumerate(gr.z)
+		Khat = exp( β'log.([kv, zv]) )
+		Khat = max(min(Khat, maximum(gr.k)), minimum(gr.k))
+		new_K[jk, jz] = Khat
+	end
+	return new_K
+end
+
+function update_LoM_K!(ks::KS, new_K; upd_η = 0.5)
+
+	norm = sqrt( sum(ks.K′.^2) )
+	dist = sqrt( sum((new_K-ks.K′).^2) ) / norm
+
+	ks.K′ = ks.K′ + upd_η * (new_K - ks.K′)
+	return dist
+end
+
+
+function update_K!(ks::KS)
+	# Simulate and get time series for (K_t, z_t)
+	k_vec, z_vec = simul(ks)
+
+	# Run regressions
+    df = DataFrame(k=log.(k_vec), k_lag = [0; log.(k_vec[1:end-1])], z = log.(z_vec))
+	ols = lm(@formula(k ~ -1 + k_lag + z), df)
+
+	# Figure out new LoM
+	new_K = new_LoM_K(ks, coef(ols))
+
+	# Update ks.K′
+	dist = update_LoM_K!(ks, new_K)
+	return dist
+end
+
+function update_prices!(ks::KS; upd_η = 0.75)
 	gr = ks.gr
 	new_w = similar(ks.w)
 	new_r = similar(ks.r)
@@ -125,12 +225,15 @@ function update_prices!(ks::KS, upd_η)
 		kv = gr.k[jk]
 		zv = gr.z[jz]
 
-		new_w[jk, jz] = (1-α) * zv * (kv/Lv)^α
-		new_r[jk, jz] =   α   * zv * (kv/Lv)^(α-1)
+		F_L = (1-α) * zv * (kv/Lv)^α
+		F_K =   α   * zv * (kv/Lv)^(α-1)
+
+		new_w[jk, jz] = F_L
+		new_r[jk, jz] = F_K - ks.pars.δ
 	end
 
-	dist_w = sum((new_w - ks.w)^2) / sum((ks.w).^2)
-	dist_r = sum((new_r - ks.r)^2) / sum((ks.r).^2)
+	dist_w = sum((new_w - ks.w).^2) / sum((ks.w).^2)
+	dist_r = sum((new_r - ks.r).^2) / sum((ks.r).^2)
 
 	dist = max(dist_w, dist_r)
 
@@ -146,18 +249,21 @@ function eqm!(ks::KS; maxiter::Int64=250, tol::Float64=1e-4)
 	iter = 0
 
 	tol_vfi = 5e-2
+	dist_v, dist_K = zeros(2)
 
+	dist_p = update_prices!(ks)
 	while dist > tol && iter < maxiter
 		iter += 1
 
-		dist_p = update_prices!(ks)
-
-		dist_v = vfi!(ks, tol_vfi = tol_vfi)
+		dist_v = vfi!(ks, tol = tol_vfi)
+		dist = dist_v
 
 		dist_K = update_K!(ks)
 
-		dist = max(dist_v, dist_K, dist_p)
+		dist = max(dist, dist_K)
 
-		tol_vfi = max(0.95*tol_vfi, 1e-6)
+		println("Iteration $(iter): d(v,k) = $([@sprintf("%.3g", dv) for dv in [dist_v, dist_K]])")
+
+		tol_vfi = max(0.9*tol_vfi, 1e-6)
 	end
 end

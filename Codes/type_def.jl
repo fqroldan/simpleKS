@@ -5,6 +5,12 @@ mutable struct Pars
 	γ::Float64
 
 	α::Float64
+	δ::Float64
+
+	ρz::Float64
+	σz::Float64
+	ρϵ::Float64
+	σϵ::Float64
 end
 
 mutable struct Grids
@@ -41,6 +47,7 @@ function KS(;
 	β::Float64 = 0.96,
 	γ::Float64 = 2.0,
 	α::Float64 = 0.33,
+	δ::Float64 = 0.05,
 	ρz = 0.9,
 	σz = 0.025,
 	Na = 7,
@@ -48,16 +55,15 @@ function KS(;
 	Nk = 10,
 	Nz = 5)
 	
-	pars = Pars(α, β, γ)
-
-	amin, amax = 0.0, 3.0
-
 	ρϵ = 0.9136		# Floden-Lindé for US
 	σϵ = 0.0426		# Floden-Lindé for US
+	pars = Pars(β, γ, α, δ, ρz, σz, ρϵ, σϵ)
+
+	amin, amax = -0.0, 3.0
 
 	agrid = cdf.(Beta(2,1), range(0,1,length=Na))
 	move_grids!(agrid, xmax=amax, xmin=amin)
-	kgrid = range(0.0, 2.0, length=Nk)
+	kgrid = range(0.1, 2.0, length=Nk)
 
 	ϵ_chain = tauchen(Nϵ, ρϵ, σϵ, 0, 2)
 	z_chain = tauchen(Nz, ρz, σz, 0, 2)
